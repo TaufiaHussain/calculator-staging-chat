@@ -77,6 +77,7 @@ def handle_user_query(
     tool_call = msg.tool_calls[0]
     tool_name: str = tool_call.function.name
     raw_args: str = tool_call.function.arguments or "{}"
+    tool_call_id: str = tool_call.id  # needed for the tool role message
 
     try:
         args: Dict[str, Any] = json.loads(raw_args)
@@ -93,23 +94,33 @@ def handle_user_query(
             tool_output = {"error": str(e), "args": args}
 
     # 3) Second pass: ask LLM to explain the result (NO tools here)
-    tool_message = {
-        "role": "tool",
-        "name": tool_name,
-        "content": json.dumps(tool_output),
-    }
-
+    # We must echo the assistant's tool_call and then give a tool message
     messages.append(
         {
             "role": "assistant",
-            "tool_calls": msg.tool_calls,
             "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": raw_args,
+                    },
+                }
+            ],
         }
     )
+
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": json.dumps(tool_output),
+    }
     messages.append(tool_message)
 
-    # ⚠️ Important: no tools, no tool_choice
-    second = _call_llm(messages)   # tools=None by default
+    # Important: second call has no tools / tool_choice
+    second = _call_llm(messages)
     assistant_text = second.choices[0].message.content or ""
 
     return assistant_text, tool_name, tool_output
