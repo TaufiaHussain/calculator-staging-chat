@@ -21,45 +21,49 @@ import math
 def calc_single(
     stock_conc: float,
     target_conc: float,
-    final_ul: float,
-    vehicle_frac: float = 0.0,
-) -> Dict[str, Any]:
+    final_ul: float | None = None,
+    vehicle_frac: float = 0.01,
+    final_volume: float | None = None,
+    volume_unit: str = "ul",
+):
     """
-    Single dilution using C1 * V1 = C2 * V2.
+    Single dilution calculator (C1V1 = C2V2).
 
-    Parameters
-    ----------
-    stock_conc : float
-        C1 (same units as target_conc, e.g. mM).
-    target_conc : float
-        C2 (same units as stock_conc).
-    final_ul : float
-        Final volume in µL.
-    vehicle_frac : float
-        Fraction of stock that is solvent (e.g. 1.0 for pure DMSO, 0.1 for 10% DMSO).
-
-    Returns
-    -------
-    dict with add_stock_ul, add_solvent_ul, vehicle_percent
+    Supports both:
+    - GUI / batch call:  final_ul + vehicle_frac
+    - LLM tool call:     final_volume + volume_unit (ul / mL / L)
     """
-    if stock_conc <= 0:
-        raise ValueError("stock_conc must be > 0")
-    if final_ul <= 0:
-        raise ValueError("final_ul must be > 0")
+    # 1) Decide which volume argument to use
+    if final_ul is None and final_volume is not None:
+        # interpret final_volume using the given unit
+        if volume_unit.lower() in ["ul", "µl", "uL"]:
+            final_ul = float(final_volume)
+        elif volume_unit.lower() in ["ml", "mL"]:
+            final_ul = float(final_volume) * 1000.0
+        elif volume_unit.lower() in ["l"]:
+            final_ul = float(final_volume) * 1_000_000.0
+        else:
+            # fallback: assume µL
+            final_ul = float(final_volume)
 
+    if final_ul is None:
+        raise ValueError("final_ul or final_volume must be provided.")
+
+    # 2) Core C1V1 = C2V2 calculation
     v1_ul = (target_conc * final_ul) / stock_conc
     solvent_ul = max(final_ul - v1_ul, 0.0)
-    vehicle_percent = (v1_ul * vehicle_frac / final_ul) * 100.0
+
+    # 3) Vehicle percentage (if DMSO/EtOH fraction is given)
+    vehicle_percent = (
+        (v1_ul * vehicle_frac / final_ul) * 100 if final_ul > 0 else 0.0
+    )
 
     return {
         "add_stock_ul": round(v1_ul, 4),
         "add_solvent_ul": round(solvent_ul, 4),
         "vehicle_percent": round(vehicle_percent, 6),
-        "final_volume_ul": final_ul,
-        "stock_conc": stock_conc,
-        "target_conc": target_conc,
+        "final_volume_ul": round(final_ul, 2),
     }
-
 
 # ------------------------------------------------------------
 # 2) SERIAL DILUTION
