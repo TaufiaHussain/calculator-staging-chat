@@ -1,0 +1,9 @@
+streamlit
+supabase
+pandas
+fpdf
+pillow
+pytesseract
+fastapi
+uvicorn
+openai>=1.0.0
