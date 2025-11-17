@@ -1388,6 +1388,7 @@ else:
     with tab_chat:
         st.subheader("Chat with your Lab Assistant")
 
+        # 1) Ensure we have a chat_session_id for this user
         if "chat_session_id" not in st.session_state:
             title = f"Session {datetime.utcnow().isoformat(timespec='seconds')}"
             try:
@@ -1402,7 +1403,7 @@ else:
 
         chat_session_id = st.session_state.get("chat_session_id")
 
-        # load history
+        # 2) Load history from Supabase
         history = []
         if chat_session_id:
             try:
@@ -1417,6 +1418,7 @@ else:
             except Exception:
                 history = []
 
+        # 3) Render past messages
         for m in history:
             with st.chat_message(m["sender"]):
                 st.markdown(m["content"])
@@ -1424,64 +1426,61 @@ else:
                     st.caption(f"Tool: {m.get('tool_called')}")
                     st.json(m["tool_output"])
 
+        # 4) New user message
         prompt = st.chat_input(
             "e.g., Make 10 µM from 10 mM in 300 µL; or Convert 1 mg/mL to mM (MW 284.44)"
         )
+
         if prompt:
+            # Show + save user message
             with st.chat_message("user"):
                 st.markdown(prompt)
             save_chat_msg(chat_session_id, "user", prompt)
 
-            tool, args = None, {}
-            t = prompt.lower()
+            # Build history for the LLM (previous turns only)
+            history_msgs = []
+            for m in history:
+                history_msgs.append(
+                    {
+                        "role": m["sender"],    # "user" or "assistant"
+                        "content": m["content"],
+                    }
+                )
 
+            # Call the router (LLM + tools + calculators)
             try:
-                # mg/mL → mM
-                if "mg/ml" in t and "mm" in t and "convert" in t:
-                    vals = [float(x) for x in t.replace("/", " ").split() if x.replace(".", "", 1).isdigit()]
-                    if len(vals) >= 2:
-                        tool = "mgml_to_mM"
-                        args = {"mg_per_ml": vals[0], "mw": vals[1]}
+                assistant_text, tool_name, tool_output = handle_user_query(
+                    prompt, history_msgs
+                )
 
-                # single dilution
-                elif "make" in t and "from" in t and ("µm" in t or "um" in t) and ("mm" in t):
-                    nums = [float(x) for x in t.replace("µ", "u").split() if x.replace(".", "", 1).isdigit()]
-                    if len(nums) >= 2:
-                        target, stock = nums[0], nums[1]
-                        vol = nums[2] if len(nums) >= 3 else well_volume
-                        tool = "single_dilution"
-                        args = {
-                            "stock_conc": stock,
-                            "target_conc": target,
-                            "final_ul": vol,
-                            "vehicle_frac": vehicle_frac,
-                        }
+                # Display assistant reply
+                with st.chat_message("assistant"):
+                    st.markdown(assistant_text)
+                    if tool_name and tool_output:
+                        st.caption(f"Tool: {tool_name}")
+                        st.json(tool_output)
 
-                if tool is None:
-                    msg = (
-                        "I can run:\n"
-                        "- **single_dilution** – ‘Make 10 µM from 10 mM in 300 µL’\n"
-                        "- **mg/mL↔mM** – ‘Convert 1 mg/mL to mM (MW 284.44)’"
+                # Save assistant message (and tool info)
+                save_chat_msg(
+                    chat_session_id,
+                    "assistant",
+                    assistant_text,
+                    tool_called=tool_name,
+                    tool_input=None,
+                    tool_output=tool_output,
+                )
+
+                # Optional: log to runs table for Tier-5 analytics
+                if tool_name and tool_output:
+                    save_run_to_cloud(
+                        tool_name,
+                        {"source": "chat"},
+                        tool_output,
+                        user_id=user.id,
                     )
-                    with st.chat_message("assistant"):
-                        st.markdown(msg)
-                    save_chat_msg(chat_session_id, "assistant", msg)
-                else:
-                    out = CALC_REGISTRY[tool](**args)
-                    with st.chat_message("assistant"):
-                        st.markdown(f"**Tool:** `{tool}`")
-                        st.json(out)
-                    save_chat_msg(
-                        chat_session_id,
-                        "assistant",
-                        f"Ran `{tool}`",
-                        tool_called=tool,
-                        tool_input=args,
-                        tool_output=out,
-                    )
-                    save_run_to_cloud(tool, args, out, user_id=user.id)
+
             except Exception as e:
-                err = f"Error: {e}"
+                err = f"Error while processing chat: {e}"
                 with st.chat_message("assistant"):
                     st.error(err)
                 save_chat_msg(chat_session_id, "assistant", err)
